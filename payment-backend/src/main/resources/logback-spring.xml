@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!--
+      JSON to stdout for Promtail/Alloy to ship into Loki.
+
+      correlationId is a FIELD, not a Loki label. Labels are indexed and every distinct
+      value creates a stream; a per-request label is the standard way to destroy a Loki
+      install. Labels stay low-cardinality (app, env, level) and are applied by the
+      collector, not here.
+
+      LMS_PAYLOAD is a separate logger so the platform team can drop borrower payloads
+      before they reach the aggregator without a code change. It is OFF by default and
+      EncryptionProfileGuard refuses to start if it is enabled outside dev or test.
+    -->
+
+    <springProperty scope="context" name="appName" source="spring.application.name"/>
+
+    <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>correlationId</includeMdcKeyName>
+            <customFields>{"app":"${appName}"}</customFields>
+            <fieldNames>
+                <timestamp>ts</timestamp>
+                <message>msg</message>
+                <thread>thread</thread>
+                <logger>logger</logger>
+                <levelValue>[ignore]</levelValue>
+            </fieldNames>
+        </encoder>
+    </appender>
+
+    <appender name="ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="JSON"/>
+        <queueSize>2048</queueSize>
+        <!-- Never drop WARN or ERROR under pressure. The default discards everything
+             below WARN when the queue is 20% full, which is acceptable; discardingThreshold
+             0 would block the request thread instead. -->
+        <discardingThreshold>20</discardingThreshold>
+        <neverBlock>true</neverBlock>
+        <includeCallerData>false</includeCallerData>
+    </appender>
+
+    <springProfile name="dev">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} %-5level [%X{correlationId:-no-cid}] %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <springProfile name="!dev">
+        <root level="INFO">
+            <appender-ref ref="ASYNC"/>
+        </root>
+    </springProfile>
+
+    <logger name="com.yourcompany.payment" level="INFO"/>
+
+    <!-- Borrower payloads. Enabled only in dev, via application-dev.properties. -->
+    <logger name="LMS_PAYLOAD" level="OFF" additivity="true"/>
+
+</configuration>
